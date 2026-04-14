@@ -241,10 +241,10 @@ def get_back_keyboard():
 
 def get_subscription_keyboard():
     keyboard = [
-        [KeyboardButton("📀 1️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 1))],
-        [KeyboardButton("💿 2️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 2))],
-        [KeyboardButton("🗄️ 5️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 5))],
-        [KeyboardButton("📀 1️⃣0️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 10))],
+        [KeyboardButton(f"📀 1 گیگ | {PRICE_PER_GB * 1:,} تومان")],
+        [KeyboardButton(f"💿 2 گیگ | {PRICE_PER_GB * 2:,} تومان")],
+        [KeyboardButton(f"🗄️ 5 گیگ | {PRICE_PER_GB * 5:,} تومان")],
+        [KeyboardButton(f"📀 10 گیگ | {PRICE_PER_GB * 10:,} تومان")],
         [KeyboardButton("↩️ بازگشت به منو")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -270,8 +270,8 @@ def get_admin_config_keyboard():
 
 def get_volume_selection_keyboard():
     keyboard = [
-        [KeyboardButton("📀 1 گیگ"), KeyboardButton("💿 2 گیگ")],
-        [KeyboardButton("🗄️ 5 گیگ"), KeyboardButton("📀 10 گیگ")],
+        [KeyboardButton("1 گیگ"), KeyboardButton("2 گیگ")],
+        [KeyboardButton("5 گیگ"), KeyboardButton("10 گیگ")],
         [KeyboardButton("↩️ انصراف")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -736,10 +736,10 @@ async def handle_admin_config_action(update, context, user_id, text):
 
 async def handle_config_volume_selection(update, context, user_id, text):
     volume_map = {
-        "📀 1 گیگ": 1,
-        "💿 2 گیگ": 2,
-        "🗄️ 5 گیگ": 5,
-        "📀 10 گیگ": 10
+        "1 گیگ": 1,
+        "2 گیگ": 2,
+        "5 گیگ": 5,
+        "10 گیگ": 10
     }
     if text in volume_map:
         volume = volume_map[text]
@@ -772,10 +772,10 @@ async def handle_config_text(update, context, user_id, state, text):
 # ---------- هندلرهای خرید و پرداخت ----------
 async def handle_subscription_plan(update, context, user_id, text):
     volume_map = {
-        "📀 1️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 1): 1,
-        "💿 2️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 2): 2,
-        "🗄️ 5️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 5): 5,
-        "📀 1️⃣0️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 10): 10
+        f"📀 1 گیگ | {PRICE_PER_GB * 1:,} تومان": 1,
+        f"💿 2 گیگ | {PRICE_PER_GB * 2:,} تومان": 2,
+        f"🗄️ 5 گیگ | {PRICE_PER_GB * 5:,} تومان": 5,
+        f"📀 10 گیگ | {PRICE_PER_GB * 10:,} تومان": 10
     }
     if text in volume_map:
         volume = volume_map[text]
@@ -945,7 +945,7 @@ async def handle_normal_commands(update, context, user_id, text):
             user_states.pop(user_id, None)
     elif text == "🛍️ خرید اشتراک":
         await update.message.reply_text("💳 پلن مورد نظر را انتخاب کنید:", reply_markup=get_subscription_keyboard())
-    elif any(text.startswith(prefix) for prefix in ["📀 1️⃣ گیگ", "💿 2️⃣ گیگ", "🗄️ 5️⃣ گیگ", "📀 1️⃣0️⃣ گیگ"]):
+    elif any(text.startswith(prefix) for prefix in ["📀 1 گیگ", "💿 2 گیگ", "🗄️ 5 گیگ", "📀 10 گیگ"]):
         await handle_subscription_plan(update, context, user_id, text)
     elif user_states.get(user_id, "").startswith("awaiting_payment_method_"):
         await handle_payment_method(update, context, user_id, text)
@@ -973,7 +973,7 @@ async def handle_normal_commands(update, context, user_id, text):
         guides = {"📱 اندروید": "📱 آموزش اندروید:\nاستفاده از اپلیکیشن V2RayNG یا Hiddify", "🍏 آیفون/مک": "🍏 آموزش iOS/Mac:\nاستفاده از اپلیکیشن Singbox یا V2box", "🖥️ ویندوز": "🪟 آموزش ویندوز:\nاستفاده از اپلیکیشن V2rayN", "🐧 لینوکس": "🐧 آموزش لینوکس:\nاستفاده از اپلیکیشن V2rayN"}
         await update.message.reply_text(guides[text], reply_markup=get_connection_guide_keyboard())
     elif text == "👑 درخواست نمایندگی":
-        await update.message.reply_text(f"👔 برای کسب اطلاعات بیشتر در مورد نمایندگی، با پشتیبانی تماس بگیرید:\n{SUPPORT_USERNAME}", reply_markup=get_main_keyboard())
+        await update.message.reply_text(f"👨‍💻 برای کسب اطلاعات بیشتر در مورد نمایندگی، با ادمین تماس بگیرید:\n{SUPPORT_USERNAME}", reply_markup=get_main_keyboard())
     else:
         await update.message.reply_text("⚠️ لطفاً از دکمه‌های منو استفاده کنید.", reply_markup=get_main_keyboard())
 
