@@ -19,14 +19,13 @@ from psycopg2 import pool
 # ---------- تنظیمات اولیه ----------
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = "@vpnkaveh"
-ADMIN_IDS = [5542927340, 6778206989]  # لیست ادمین‌ها
+ADMIN_IDS = [5542927340, 6778206989]
 SUPPORT_USERNAME = "@kavehpro"
 BANK_CARD = "6274121773306105"
 BANK_OWNER = "کاوه"
-PRICE_PER_GB = 450000  # قیمت هر گیگ کانفیگ
+PRICE_PER_GB = 450000
 CONFIG_NAME = "کانفیگ پر سرعت"
 
-# حجم‌های قابل ارائه
 AVAILABLE_VOLUMES = [1, 2, 5, 10]
 
 RENDER_BASE_URL = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RAILWAY_STATIC_URL") or "https://kavehvpn.railway.app"
@@ -44,32 +43,22 @@ logging.basicConfig(
 
 app = FastAPI()
 
-# ---------- توابع کمکی برای اعداد فارسی ----------
+# ---------- توابع کمکی ----------
 def persian_number(number):
-    """تبدیل عدد به فارسی"""
-    persian_digits = {
-        '0': '۰', '1': '۱', '2': '۲', '3': '۳', '4': '۴',
-        '5': '۵', '6': '۶', '7': '۷', '8': '۸', '9': '۹'
-    }
+    persian_digits = {'0': '۰', '1': '۱', '2': '۲', '3': '۳', '4': '۴', '5': '۵', '6': '۶', '7': '۷', '8': '۸', '9': '۹'}
     return ''.join(persian_digits.get(ch, ch) for ch in str(number))
 
 def english_number(persian_str):
-    """تبدیل عدد فارسی به انگلیسی"""
-    english_digits = {
-        '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
-        '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9'
-    }
+    english_digits = {'۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4', '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9'}
     result = ''
     for ch in persian_str:
         result += english_digits.get(ch, ch)
     return result
 
 def format_price(price):
-    """فرمت قیمت با کاما و اعداد فارسی"""
     return persian_number(f"{price:,}")
 
 def is_admin(user_id: int) -> bool:
-    """بررسی ادمین بودن کاربر"""
     return user_id in ADMIN_IDS
 
 # ---------- endpoint سلامت ----------
@@ -149,7 +138,7 @@ async def db_execute(query, params=(), fetch=False, fetchone=False, returning=Fa
         logging.error(f"Async database error: {e}")
         raise
 
-# ---------- ساخت جداول ----------
+# ---------- ساخت جداول (بدون پاک کردن) ----------
 CREATE_USERS_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY,
@@ -231,18 +220,16 @@ UPDATE subscriptions SET start_date = COALESCE(start_date, CURRENT_TIMESTAMP), d
 WHERE start_date IS NULL OR duration_days IS NULL;
 """
 
-DROP_CONFIG_POOL_SQL = "DROP TABLE IF EXISTS config_pool CASCADE;"
-
 async def create_tables():
+    """ایجاد جداول در صورت عدم وجود - بدون پاک کردن داده‌های قبلی"""
     try:
-        await db_execute(DROP_CONFIG_POOL_SQL)
         await db_execute(CREATE_USERS_SQL)
         await db_execute(CREATE_PAYMENTS_SQL)
         await db_execute(CREATE_SUBSCRIPTIONS_SQL)
         await db_execute(CREATE_COUPONS_SQL)
         await db_execute(CREATE_CONFIG_POOL_SQL)
         await db_execute(MIGRATE_SUBSCRIPTIONS_SQL)
-        logging.info("Database tables created and migrated successfully (config_pool cleared)")
+        logging.info("Database tables created successfully (existing data preserved)")
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
 
@@ -325,7 +312,6 @@ async def send_long_message(chat_id, text, context, reply_markup=None, parse_mod
         await context.bot.send_message(chat_id=chat_id, text=msg, reply_markup=reply_markup if i == len(messages)-1 else None, parse_mode=parse_mode)
 
 def parse_configs_from_text(text: str) -> List[str]:
-    """استخراج چند کانفیگ از یک متن (هر کانفیگ در یک خط)"""
     lines = text.strip().split('\n')
     configs = []
     for line in lines:
@@ -645,29 +631,32 @@ async def send_config_to_user(subscription_id: int, user_id: int, volume: int, p
             f"✅ اشتراک {plan} شما فعال شد!\n\n🔐 کانفیگ شما:\n```\n{config['config_text']}\n```",
             parse_mode="Markdown"
         )
+        # فقط به ادمین‌ها اطلاع بده (نه به کاربر)
         for admin_id in ADMIN_IDS:
             try:
-                await bot.send_message(
-                    admin_id,
-                    f"✅ کانفیگ {persian_number(volume)} گیگ به طور خودکار برای کاربر {user_id} ارسال شد."
-                )
+                if user_id not in ADMIN_IDS:  # اگر کاربر ادمین نبود
+                    await bot.send_message(
+                        admin_id,
+                        f"✅ کانفیگ {persian_number(volume)} گیگ برای کاربر {user_id} ارسال شد."
+                    )
             except:
                 pass
         return True
     else:
-        for admin_id in ADMIN_IDS:
-            try:
-                await bot.send_message(
-                    admin_id,
-                    f"⚠️ کاربر {user_id} درخواست {persian_number(volume)} گیگ {CONFIG_NAME} دارد اما کانفیگ موجود نیست!"
-                )
-            except:
-                pass
+        # فقط اگر کاربر ادمین نبود، پیام خطا بفرست (ادمین برای تست می‌خواد)
+        if user_id not in ADMIN_IDS:
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        admin_id,
+                        f"⚠️ کاربر {user_id} درخواست {persian_number(volume)} گیگ {CONFIG_NAME} دارد اما کانفیگ موجود نیست!"
+                    )
+                except:
+                    pass
         return False
 
-# ---------- وظیفه دوره‌ای با asyncio ----------
+# ---------- وظیفه دوره‌ای ----------
 async def periodic_pending_check(bot):
-    """بررسی دوره‌ای اشتراک‌های در انتظار (هر 30 ثانیه)"""
     while True:
         try:
             await asyncio.sleep(30)
@@ -929,7 +918,6 @@ async def handle_subscription_plan(update, context, user_id, text):
     if text in volume_map:
         volume = volume_map[text]
         
-        # بررسی موجود بودن کانفیگ قبل از ادامه
         available_volumes = await get_available_volumes()
         if volume not in available_volumes:
             available_text = "، ".join([persian_number(v) for v in available_volumes]) if available_volumes else "هیچ"
@@ -1033,7 +1021,6 @@ async def handle_payment_method(update, context, user_id, text):
                             await context.bot.send_message(admin_id, f"🛍️ کاربر {user_id} سرویس {plan} را از کیف پول خود خریداری کرد.")
                         except:
                             pass
-                    # ارسال خودکار کانفیگ
                     sub = await db_execute("SELECT id FROM subscriptions WHERE payment_id = %s", (payment_id,), fetchone=True)
                     if sub:
                         await send_config_to_user(sub[0], user_id, volume, plan, context.bot)
@@ -1221,14 +1208,12 @@ async def admin_callback_handler(update, context):
             if ptype == "increase_balance":
                 await add_balance(uid, amt)
                 await context.bot.send_message(uid, f"💰 مبلغ {format_price(amt)} تومان به کیف پول شما اضافه شد.")
-                await query.edit_message_text("✅ پرداخت تایید شد.")
+                await query.edit_message_reply_markup(reply_markup=None)
+                await query.message.reply_text("✅ پرداخت تایید شد.")
             elif ptype == "buy_subscription":
                 await context.bot.send_message(uid, f"✅ پرداخت شما تایید شد. کد پیگیری: #{payment_id}")
-                # حذف دکمه‌های کیبورد
                 await query.edit_message_reply_markup(reply_markup=None)
-                # ارسال پیام جدید به جای ویرایش
                 await query.message.reply_text("✅ پرداخت تایید شد. در حال ارسال کانفیگ...")
-                # ارسال خودکار کانفیگ
                 sub = await db_execute("SELECT id, volume, plan FROM subscriptions WHERE payment_id = %s", (payment_id,), fetchone=True)
                 if sub:
                     subscription_id, volume, plan = sub
@@ -1240,9 +1225,7 @@ async def admin_callback_handler(update, context):
             if payment:
                 user_id = payment[0]
                 await context.bot.send_message(user_id, "❌ متأسفانه پرداخت شما تایید نشد. لطفاً مجدداً تلاش کنید.")
-            # حذف دکمه‌های کیبورد
             await query.edit_message_reply_markup(reply_markup=None)
-            # ارسال پیام جدید به جای ویرایش
             await query.message.reply_text("❌ پرداخت رد شد.")
         elif data == "admin_balance_action":
             await query.edit_message_text("🆔 آیدی کاربر را وارد کنید:")
@@ -1445,12 +1428,11 @@ async def on_startup():
         logging.info(f"✅ Webhook set: {WEBHOOK_URL}")
         await set_bot_commands()
         
-        # راه‌اندازی تسک دوره‌ای با asyncio (ارسال bot به جای context)
         periodic_task = asyncio.create_task(periodic_pending_check(application.bot))
         
         for admin_id in ADMIN_IDS:
             try:
-                await application.bot.send_message(chat_id=admin_id, text="🤖 ربات کاوه وی‌پی‌ان با موفقیت راه‌اندازی شد!\n✅ سیستم مدیریت خودکار کانفیگ فعال است.\n✅ حافظه کانفیگ‌ها پاکسازی شد.")
+                await application.bot.send_message(chat_id=admin_id, text="🤖 ربات کاوه وی‌پی‌ان با موفقیت راه‌اندازی شد!\n✅ سیستم مدیریت خودکار کانفیگ فعال است.\n✅ داده‌های قبلی حفظ شد.")
             except:
                 pass
         logging.info("✅ Bot started successfully")
