@@ -25,8 +25,11 @@ ADMIN_ID = 5542927340
 SUPPORT_USERNAME = "@kavehpro"
 BANK_CARD = "6274121773306105"
 BANK_OWNER = "کاوه"
-CONFIG_PRICE = 450000  # قیمت هر گیگ کانفیگ ویژه
-CONFIG_NAME = "کانفیگ ویژه"
+PRICE_PER_GB = 450000  # قیمت هر گیگ کانفیگ
+CONFIG_NAME = "کانفیگ پر سرعت | آیپی 🇹🇷"
+
+# حجم‌های قابل ارائه
+AVAILABLE_VOLUMES = [1, 2, 5, 10]
 
 RENDER_BASE_URL = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RAILWAY_STATIC_URL") or "https://kavehvpn.railway.app"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
@@ -155,7 +158,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     status TEXT DEFAULT 'pending',
     start_date TIMESTAMP,
     duration_days INTEGER,
-    volume INTEGER  -- حجم درخواستی کاربر به گیگ
+    volume INTEGER
 )
 """
 CREATE_COUPONS_SQL = """
@@ -171,7 +174,7 @@ CREATE TABLE IF NOT EXISTS coupons (
 CREATE_CONFIG_POOL_SQL = """
 CREATE TABLE IF NOT EXISTS config_pool (
     id SERIAL PRIMARY KEY,
-    volume INTEGER NOT NULL,  -- حجم کانفیگ به گیگ
+    volume INTEGER NOT NULL,
     config_text TEXT NOT NULL,
     is_sold BOOLEAN DEFAULT FALSE,
     sold_to_user BIGINT,
@@ -237,7 +240,14 @@ def get_back_keyboard():
     return ReplyKeyboardMarkup([[KeyboardButton("↩️ بازگشت به منو")]], resize_keyboard=True)
 
 def get_subscription_keyboard():
-    return ReplyKeyboardMarkup([[KeyboardButton(f"⚡ {CONFIG_NAME} | هر گیگ {CONFIG_PRICE:,} تومان")], [KeyboardButton("↩️ بازگشت به منو")]], resize_keyboard=True)
+    keyboard = [
+        [KeyboardButton("📀 1️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 1))],
+        [KeyboardButton("💿 2️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 2))],
+        [KeyboardButton("🗄️ 5️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 5))],
+        [KeyboardButton("📀 1️⃣0️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 10))],
+        [KeyboardButton("↩️ بازگشت به منو")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_payment_method_keyboard():
     return ReplyKeyboardMarkup([[KeyboardButton("🏧 انتقال کارت به کارت")], [KeyboardButton("👛 پرداخت از کیف پول")], [KeyboardButton("↩️ بازگشت به منو")]], resize_keyboard=True)
@@ -255,6 +265,14 @@ def get_admin_config_keyboard():
         [KeyboardButton("📊 مشاهده موجودی کانفیگ‌ها")],
         [KeyboardButton("📋 لیست تمام کانفیگ‌ها")],
         [KeyboardButton("↩️ بازگشت به منو")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_volume_selection_keyboard():
+    keyboard = [
+        [KeyboardButton("📀 1 گیگ"), KeyboardButton("💿 2 گیگ")],
+        [KeyboardButton("🗄️ 5 گیگ"), KeyboardButton("📀 10 گیگ")],
+        [KeyboardButton("↩️ انصراف")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -444,7 +462,6 @@ async def send_notification_to_users(context, user_ids, notification_text):
 
 # ---------- توابع مدیریت کانفیگ ----------
 async def add_config_to_pool(volume: int, config_text: str, admin_id: int) -> bool:
-    """اضافه کردن کانفیگ جدید به استخر"""
     try:
         await db_execute(
             "INSERT INTO config_pool (volume, config_text, created_by, is_sold) VALUES (%s, %s, %s, FALSE)",
@@ -456,7 +473,6 @@ async def add_config_to_pool(volume: int, config_text: str, admin_id: int) -> bo
         return False
 
 async def get_available_config(volume: int) -> Optional[Dict]:
-    """دریافت یک کانفیگ موجود از استخر بر اساس حجم"""
     try:
         row = await db_execute(
             "SELECT id, config_text FROM config_pool WHERE volume = %s AND is_sold = FALSE ORDER BY id LIMIT 1",
@@ -470,7 +486,6 @@ async def get_available_config(volume: int) -> Optional[Dict]:
         return None
 
 async def mark_config_as_sold(config_id: int, user_id: int) -> bool:
-    """علامت زدن کانفیگ به عنوان فروخته شده"""
     try:
         await db_execute(
             "UPDATE config_pool SET is_sold = TRUE, sold_to_user = %s, sold_at = CURRENT_TIMESTAMP WHERE id = %s",
@@ -482,14 +497,11 @@ async def mark_config_as_sold(config_id: int, user_id: int) -> bool:
         return False
 
 async def get_config_pool_stats() -> Dict:
-    """دریافت آمار استخر کانفیگ‌ها"""
     try:
-        # آمار کلی
         total = await db_execute("SELECT COUNT(*) FROM config_pool", fetchone=True)
         sold = await db_execute("SELECT COUNT(*) FROM config_pool WHERE is_sold = TRUE", fetchone=True)
         available = await db_execute("SELECT COUNT(*) FROM config_pool WHERE is_sold = FALSE", fetchone=True)
         
-        # آمار به تفکیک حجم
         volume_stats = await db_execute(
             "SELECT volume, COUNT(*) as total, SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) as sold FROM config_pool GROUP BY volume ORDER BY volume",
             fetch=True
@@ -516,7 +528,6 @@ async def get_config_pool_stats() -> Dict:
         return {"total": 0, "sold": 0, "available": 0, "by_volume": []}
 
 async def get_all_configs() -> List[Dict]:
-    """دریافت لیست تمام کانفیگ‌ها"""
     try:
         rows = await db_execute(
             "SELECT id, volume, config_text, is_sold, sold_to_user, created_by, created_at, sold_at FROM config_pool ORDER BY created_at DESC",
@@ -540,7 +551,6 @@ async def get_all_configs() -> List[Dict]:
         return []
 
 async def get_pending_subscriptions() -> List[Dict]:
-    """دریافت اشتراک‌های در انتظار تایید که کانفیگ برایشان ارسال نشده"""
     try:
         rows = await db_execute(
             "SELECT s.id, s.user_id, s.volume, s.plan, p.id as payment_id FROM subscriptions s JOIN payments p ON s.payment_id = p.id WHERE s.status = 'pending' AND p.status = 'approved'",
@@ -623,7 +633,6 @@ async def notification_command(update, context):
     user_states[update.effective_user.id] = "awaiting_notification_type"
 
 async def add_config_command(update, context):
-    """دستور مدیریت کانفیگ‌ها برای ادمین"""
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⛔ دسترسی غیرمجاز.")
         return
@@ -688,8 +697,8 @@ async def start_with_param(update, context):
 # ---------- هندلرهای مدیریت کانفیگ برای ادمین ----------
 async def handle_admin_config_action(update, context, user_id, text):
     if text == "➕ اضافه کردن کانفیگ جدید":
-        await update.message.reply_text("📊 حجم کانفیگ را به گیگ وارد کنید (مثال: 2 برای 2 گیگ):", reply_markup=get_back_keyboard())
-        user_states[user_id] = "awaiting_config_volume"
+        await update.message.reply_text("📊 حجم کانفیگ را انتخاب کنید:", reply_markup=get_volume_selection_keyboard())
+        user_states[user_id] = "awaiting_config_volume_selection"
     elif text == "📊 مشاهده موجودی کانفیگ‌ها":
         stats = await get_config_pool_stats()
         response = f"📊 **آمار استخر کانفیگ‌ها**\n\n"
@@ -725,16 +734,22 @@ async def handle_admin_config_action(update, context, user_id, text):
     else:
         await update.message.reply_text("⚠️ لطفاً از دکمه‌های منو استفاده کنید.", reply_markup=get_admin_config_keyboard())
 
-async def handle_config_volume(update, context, user_id, text):
-    try:
-        volume = int(text)
-        if volume <= 0:
-            await update.message.reply_text("⚠️ حجم باید بزرگتر از 0 باشد. لطفاً مجدد وارد کنید:", reply_markup=get_back_keyboard())
-            return
+async def handle_config_volume_selection(update, context, user_id, text):
+    volume_map = {
+        "📀 1 گیگ": 1,
+        "💿 2 گیگ": 2,
+        "🗄️ 5 گیگ": 5,
+        "📀 10 گیگ": 10
+    }
+    if text in volume_map:
+        volume = volume_map[text]
         user_states[user_id] = f"awaiting_config_text_{volume}"
         await update.message.reply_text(f"🔐 لطفاً کانفیگ {volume} گیگی را به صورت متن ارسال کنید:", reply_markup=get_back_keyboard())
-    except ValueError:
-        await update.message.reply_text("⚠️ لطفاً یک عدد صحیح وارد کنید:", reply_markup=get_back_keyboard())
+    elif text == "↩️ انصراف":
+        await update.message.reply_text("⚙️ پنل مدیریت کانفیگ‌ها:", reply_markup=get_admin_config_keyboard())
+        user_states.pop(user_id, None)
+    else:
+        await update.message.reply_text("⚠️ لطفاً یکی از گزینه‌های حجم را انتخاب کنید.", reply_markup=get_volume_selection_keyboard())
 
 async def handle_config_text(update, context, user_id, state, text):
     try:
@@ -755,21 +770,24 @@ async def handle_config_text(update, context, user_id, state, text):
         user_states.pop(user_id, None)
 
 # ---------- هندلرهای خرید و پرداخت ----------
-async def handle_config_count(update, context, user_id, state, text):
-    try:
-        count = int(text)
-        if count < 1:
-            await update.message.reply_text("⚠️ تعداد باید حداقل 1 باشد.", reply_markup=get_back_keyboard())
-            return
-        total_amount = CONFIG_PRICE * count
-        plan_name = f"⚡ {CONFIG_NAME} | {count} گیگ"
+async def handle_subscription_plan(update, context, user_id, text):
+    volume_map = {
+        "📀 1️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 1): 1,
+        "💿 2️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 2): 2,
+        "🗄️ 5️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 5): 5,
+        "📀 1️⃣0️⃣ گیگ | {:,} تومان".format(PRICE_PER_GB * 10): 10
+    }
+    if text in volume_map:
+        volume = volume_map[text]
+        total_amount = PRICE_PER_GB * volume
+        plan_name = f"⚡ {CONFIG_NAME} | {volume} گیگ"
         await update.message.reply_text(
-            f"✅ {count} گیگ {CONFIG_NAME} با مبلغ {total_amount:,} تومان\n\nبرای ادامه روی 'ادامه' کلیک کنید:",
+            f"✅ {volume} گیگ {CONFIG_NAME} با مبلغ {total_amount:,} تومان\n\nبرای ادامه روی 'ادامه' کلیک کنید:",
             reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("↩️ بازگشت به منو")]], resize_keyboard=True)
         )
-        user_states[user_id] = f"awaiting_coupon_code_{total_amount}_{plan_name}_{count}"
-    except ValueError:
-        await update.message.reply_text("⚠️ لطفاً یک عدد صحیح وارد کنید:", reply_markup=get_back_keyboard())
+        user_states[user_id] = f"awaiting_coupon_code_{total_amount}_{plan_name}_{volume}"
+    else:
+        await update.message.reply_text("⚠️ لطفاً از دکمه‌های منو استفاده کنید.", reply_markup=get_subscription_keyboard())
 
 async def handle_coupon_code(update, context, user_id, state, text):
     parts = state.split("_")
@@ -819,7 +837,6 @@ async def handle_payment_method(update, context, user_id, text):
                     await update_payment_status(payment_id, "approved")
                     await update.message.reply_text("✅ خرید با موفقیت انجام شد. کانفیگ برای شما ارسال خواهد شد.", reply_markup=get_main_keyboard())
                     await context.bot.send_message(ADMIN_ID, f"🛍️ کاربر {user_id} سرویس {plan} را از کیف پول خود خریداری کرد.")
-                    # بررسی و ارسال خودکار کانفیگ
                     await process_pending_subscriptions(context)
                     user_states.pop(user_id, None)
             else:
@@ -852,28 +869,22 @@ async def process_payment_receipt(update, context, user_id, payment_id, receipt_
         await update.message.reply_text("⚠️ خطا در ارسال فیش.", reply_markup=get_main_keyboard())
 
 async def process_pending_subscriptions(context):
-    """پردازش اشتراک‌های در انتظار و ارسال خودکار کانفیگ"""
     pending_subs = await get_pending_subscriptions()
     for sub in pending_subs:
         config = await get_available_config(sub['volume'])
         if config:
-            # به روز رسانی اشتراک با کانفیگ
             await update_subscription_config(sub['subscription_id'], config['config_text'])
-            # علامت زدن کانفیگ به عنوان فروخته شده
             await mark_config_as_sold(config['id'], sub['user_id'])
-            # ارسال کانفیگ به کاربر
             await context.bot.send_message(
                 sub['user_id'],
                 f"✅ اشتراک {sub['plan']} شما فعال شد!\n\n🔐 کانفیگ شما:\n```\n{config['config_text']}\n```",
                 parse_mode="Markdown"
             )
-            # اطلاع به ادمین
             await context.bot.send_message(
                 ADMIN_ID,
                 f"✅ کانفیگ {sub['volume']} گیگ به طور خودکار برای کاربر {sub['user_id']} ارسال شد."
             )
         else:
-            # اگر کانفیگ موجود نبود به ادمین اطلاع بده
             await context.bot.send_message(
                 ADMIN_ID,
                 f"⚠️ کاربر {sub['user_id']} درخواست {sub['volume']} گیگ {CONFIG_NAME} دارد اما کانفیگ موجود نیست!"
@@ -934,9 +945,8 @@ async def handle_normal_commands(update, context, user_id, text):
             user_states.pop(user_id, None)
     elif text == "🛍️ خرید اشتراک":
         await update.message.reply_text("💳 پلن مورد نظر را انتخاب کنید:", reply_markup=get_subscription_keyboard())
-    elif text == f"⚡ {CONFIG_NAME} | هر گیگ {CONFIG_PRICE:,} تومان":
-        await update.message.reply_text(f"🔢 تعداد گیگ مورد نیاز را وارد کنید (مثال: 2 برای 2 گیگ):\n💰 قیمت هر گیگ: {CONFIG_PRICE:,} تومان", reply_markup=get_back_keyboard())
-        user_states[user_id] = f"awaiting_config_count_{CONFIG_PRICE}_{CONFIG_NAME}"
+    elif any(text.startswith(prefix) for prefix in ["📀 1️⃣ گیگ", "💿 2️⃣ گیگ", "🗄️ 5️⃣ گیگ", "📀 1️⃣0️⃣ گیگ"]):
+        await handle_subscription_plan(update, context, user_id, text)
     elif user_states.get(user_id, "").startswith("awaiting_payment_method_"):
         await handle_payment_method(update, context, user_id, text)
     elif text == "🆘 پشتیبانی":
@@ -1019,7 +1029,6 @@ async def admin_callback_handler(update, context):
                 await context.bot.send_message(uid, f"✅ پرداخت شما تایید شد. کد پیگیری: #{payment_id}")
                 await query.edit_message_reply_markup(reply_markup=None)
                 await query.edit_message_text("✅ پرداخت تایید شد. در حال ارسال کانفیگ...")
-                # پردازش اشتراک‌های در انتظار
                 await process_pending_subscriptions(context)
         elif data.startswith("reject_"):
             payment_id = int(data.split("_")[1])
@@ -1062,11 +1071,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if state == "awaiting_admin_config_action":
             await handle_admin_config_action(update, context, user_id, text)
             return
+        if state == "awaiting_config_volume_selection":
+            await handle_config_volume_selection(update, context, user_id, text)
+            return
         if state and state.startswith("awaiting_config_text_"):
             await handle_config_text(update, context, user_id, state, text)
-            return
-        if state == "awaiting_config_volume":
-            await handle_config_volume(update, context, user_id, text)
             return
         if state == "awaiting_user_id_for_removal":
             await handle_remove_user(update, context, user_id, text)
@@ -1155,9 +1164,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_payment_receipt(update, context, user_id, payment_id, "subscription")
         user_states.pop(user_id, None)
         return
-    if state and state.startswith("awaiting_config_count_"):
-        await handle_config_count(update, context, user_id, state, text)
-        return
     if state and state.startswith("awaiting_coupon_code_"):
         await handle_coupon_code(update, context, user_id, state, text)
         return
@@ -1206,14 +1212,11 @@ async def telegram_webhook(request: Request):
 
 # ---------- تابع بررسی دوره ای اشتراک‌های در انتظار ----------
 async def periodic_pending_check(context: ContextTypes.DEFAULT_TYPE):
-    """بررسی دوره‌ای برای پردازش اشتراک‌های در انتظار"""
     await process_pending_subscriptions(context)
 
 # ---------- تنظیم JobQueue ----------
 def setup_job_queue():
-    """تنظیم JobQueue برای اجرای دوره‌ای وظایف"""
     if application.job_queue:
-        # هر 30 ثانیه یکبار بررسی کن
         application.job_queue.run_repeating(periodic_pending_check, interval=30, first=10)
         logging.info("JobQueue setup completed")
 
