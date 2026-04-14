@@ -11,7 +11,7 @@ from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 )
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+    Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, JobQueue
 )
 import psycopg2
 from psycopg2 import pool
@@ -52,6 +52,17 @@ def persian_number(number):
         '5': '۵', '6': '۶', '7': '۷', '8': '۸', '9': '۹'
     }
     return ''.join(persian_digits.get(ch, ch) for ch in str(number))
+
+def english_number(persian_str):
+    """تبدیل عدد فارسی به انگلیسی"""
+    english_digits = {
+        '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
+        '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9'
+    }
+    result = ''
+    for ch in persian_str:
+        result += english_digits.get(ch, ch)
+    return result
 
 def format_price(price):
     """فرمت قیمت با کاما و اعداد فارسی"""
@@ -312,7 +323,7 @@ def parse_configs_from_text(text: str) -> List[str]:
     configs = []
     for line in lines:
         line = line.strip()
-        if line and (line.startswith('http://') or line.startswith('https://') or line.startswith('vless://') or line.startswith('vmess://')):
+        if line and (line.startswith('http://') or line.startswith('https://') or line.startswith('vless://') or line.startswith('vmess://') or line.startswith('trojan://') or line.startswith('ss://')):
             configs.append(line)
     return configs
 
@@ -877,11 +888,12 @@ async def handle_subscription_plan(update, context, user_id, text):
         
         total_amount = PRICE_PER_GB * volume
         plan_name = f"⚡ {CONFIG_NAME} | {persian_number(volume)} گیگ"
+        # ذخیره volume به صورت عدد انگلیسی در state
+        user_states[user_id] = f"awaiting_coupon_code_{total_amount}_{plan_name}_{volume}"
         await update.message.reply_text(
             f"✅ {persian_number(volume)} گیگ {CONFIG_NAME} با مبلغ {format_price(total_amount)} تومان\n\nبرای ادامه روی 'ادامه' کلیک کنید:",
             reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ادامه")], [KeyboardButton("↩️ بازگشت به منو")]], resize_keyboard=True)
         )
-        user_states[user_id] = f"awaiting_coupon_code_{total_amount}_{plan_name}_{volume}"
     else:
         await update.message.reply_text("⚠️ لطفاً از دکمه‌های منو استفاده کنید.", reply_markup=get_subscription_keyboard())
 
@@ -907,12 +919,34 @@ async def handle_coupon_code(update, context, user_id, state, text):
 
 async def handle_payment_method(update, context, user_id, text):
     state = user_states.get(user_id)
+    if not state:
+        return
     try:
         parts = state.split("_")
+        # amount, plan, volume, coupon_code
+        if len(parts) < 5:
+            await update.message.reply_text("⚠️ خطا در پردازش درخواست. لطفاً مجدد تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
+            return
+        
         amount = int(parts[3])
-        plan = "_".join(parts[4:-2]) if len(parts) > 6 else "_".join(parts[4:-1])
-        volume = int(parts[-2]) if len(parts) > 5 else 1
-        coupon_code = parts[-1] if len(parts) > 6 else None
+        
+        # پیدا کردن position های صحیح
+        # ساختار: awaiting_payment_method_{amount}_{plan}_{volume}_{coupon_code?}
+        # plan ممکن است شامل زیرخط باشد، بنابراین باید از آخر شروع کنیم
+        if len(parts) >= 6 and parts[-1] and parts[-1] not in ["card_to_card", "balance"]:
+            # با کد تخفیف
+            coupon_code = parts[-1]
+            volume = int(parts[-2])
+            # plan = همه چیز بین index 4 تا -2
+            plan_parts = parts[4:-2]
+            plan = "_".join(plan_parts)
+        else:
+            # بدون کد تخفیف
+            coupon_code = None
+            volume = int(parts[-1])
+            plan_parts = parts[4:-1]
+            plan = "_".join(plan_parts)
         
         if text == "🏧 انتقال کارت به کارت":
             payment_id = await add_payment(user_id, amount, "buy_subscription", "card_to_card", description=plan, coupon_code=coupon_code)
@@ -947,7 +981,7 @@ async def handle_payment_method(update, context, user_id, text):
                 user_states.pop(user_id, None)
     except Exception as e:
         logging.error(f"Error in payment method: {e}")
-        await update.message.reply_text("⚠️ خطا در پردازش درخواست.", reply_markup=get_main_keyboard())
+        await update.message.reply_text("⚠️ خطا در پردازش درخواست. لطفاً مجدد تلاش کنید.", reply_markup=get_main_keyboard())
         user_states.pop(user_id, None)
 
 async def process_payment_receipt(update, context, user_id, payment_id, receipt_type):
@@ -957,7 +991,7 @@ async def process_payment_receipt(update, context, user_id, payment_id, receipt_
             await update.message.reply_text("⚠️ درخواست پرداخت یافت نشد.", reply_markup=get_main_keyboard())
             return
         amount, description = payment
-        caption = f"💳 فیش پرداختی از کاربر {user_id}:\n💰 مبلغ: {format_price(amount)} تومان\n📦 نوع: خرید اشتراک"
+        caption = f"💳 فیش پرداختی از کاربر {user_id}:\n💰 مبلغ: {format_price(amount)} تومان\n📦 نوع: {receipt_type}"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ تایید", callback_data=f"approve_payment_{payment_id}"),
              InlineKeyboardButton("❌ رد", callback_data=f"reject_payment_{payment_id}")]
@@ -1273,12 +1307,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # هندلرهای عادی کاربران
     if state and state.startswith("awaiting_deposit_receipt_"):
         payment_id = int(state.split("_")[-1])
-        await process_payment_receipt(update, context, user_id, payment_id, "deposit")
+        await process_payment_receipt(update, context, user_id, payment_id, "شارژ کیف پول")
         user_states.pop(user_id, None)
         return
     if state and state.startswith("awaiting_subscription_receipt_"):
         payment_id = int(state.split("_")[-1])
-        await process_payment_receipt(update, context, user_id, payment_id, "subscription")
+        await process_payment_receipt(update, context, user_id, payment_id, "خرید اشتراک")
         user_states.pop(user_id, None)
         return
     if state and state.startswith("awaiting_coupon_code_"):
@@ -1340,9 +1374,15 @@ async def periodic_pending_check(context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- تنظیم JobQueue ----------
 def setup_job_queue():
-    if application.job_queue:
-        application.job_queue.run_repeating(periodic_pending_check, interval=30, first=10)
-        logging.info("JobQueue setup completed")
+    """تنظیم JobQueue برای اجرای دوره‌ای وظایف"""
+    # ایجاد JobQueue جدید
+    job_queue = JobQueue()
+    job_queue.set_application(application)
+    job_queue.start()
+    application.job_queue = job_queue
+    # هر 30 ثانیه یکبار بررسی کن
+    application.job_queue.run_repeating(periodic_pending_check, interval=30, first=10)
+    logging.info("JobQueue setup completed")
 
 # ---------- lifecycle ----------
 @app.on_event("startup")
@@ -1364,6 +1404,8 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     try:
+        if application.job_queue:
+            application.job_queue.stop()
         await application.stop()
         await application.shutdown()
         close_db_pool()
@@ -1373,5 +1415,5 @@ async def on_shutdown():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
