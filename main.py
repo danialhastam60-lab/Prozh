@@ -43,6 +43,9 @@ logging.basicConfig(
 
 app = FastAPI()
 
+# ---------- وضعیت ربات ----------
+bot_is_active = True  # وضعیت پیش‌فرض: روشن
+
 # ---------- توابع کمکی ----------
 def persian_number(number):
     persian_digits = {'0': '۰', '1': '۱', '2': '۲', '3': '۳', '4': '۴', '5': '۵', '6': '۶', '7': '۷', '8': '۸', '9': '۹'}
@@ -139,6 +142,13 @@ async def db_execute(query, params=(), fetch=False, fetchone=False, returning=Fa
         raise
 
 # ---------- ساخت جداول ----------
+CREATE_BOT_STATUS_SQL = """
+CREATE TABLE IF NOT EXISTS bot_status (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    is_active BOOLEAN DEFAULT TRUE
+)
+"""
+
 CREATE_USERS_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY,
@@ -222,15 +232,42 @@ WHERE start_date IS NULL OR duration_days IS NULL;
 
 async def create_tables():
     try:
+        await db_execute(CREATE_BOT_STATUS_SQL)
         await db_execute(CREATE_USERS_SQL)
         await db_execute(CREATE_PAYMENTS_SQL)
         await db_execute(CREATE_SUBSCRIPTIONS_SQL)
         await db_execute(CREATE_COUPONS_SQL)
         await db_execute(CREATE_CONFIG_POOL_SQL)
         await db_execute(MIGRATE_SUBSCRIPTIONS_SQL)
+        
+        # تنظیم وضعیت اولیه ربات
+        status = await db_execute("SELECT is_active FROM bot_status WHERE id = 1", fetchone=True)
+        if not status:
+            await db_execute("INSERT INTO bot_status (id, is_active) VALUES (1, TRUE)")
+            global bot_is_active
+            bot_is_active = True
+        else:
+            bot_is_active = status[0]
+            
         logging.info("Database tables created successfully (existing data preserved)")
     except Exception as e:
         logging.error(f"Error creating or migrating tables: {e}")
+
+# ---------- توابع مدیریت وضعیت ربات ----------
+async def set_bot_status(is_active: bool):
+    global bot_is_active
+    bot_is_active = is_active
+    await db_execute("UPDATE bot_status SET is_active = %s WHERE id = 1", (is_active,))
+
+async def get_bot_status() -> bool:
+    global bot_is_active
+    return bot_is_active
+
+async def is_bot_available_for_user(user_id: int) -> bool:
+    """بررسی اینکه آیا ربات برای کاربر عادی در دسترس است"""
+    if is_admin(user_id):
+        return True  # ادمین همیشه دسترسی دارد
+    return await get_bot_status()  # کاربران عادی فقط در صورت روشن بودن ربات
 
 # ---------- وضعیت کاربر ----------
 user_states = {}
@@ -327,24 +364,12 @@ async def is_user_member(user_id):
     except:
         return False
 
-async def notify_admin_new_user(user_id, username, invited_by=None):
-    try:
-        total_users = await db_execute("SELECT COUNT(*) FROM users", fetchone=True)
-        msg = f"✨ کاربر جدید ثبت نام کرد:\n🆔 {user_id}\n📛 @{username if username else 'بدون یوزرنیم'}\n📊 مجموع کاربران: {persian_number(total_users[0]) if total_users else '۰'}"
-        for admin_id in ADMIN_IDS:
-            try:
-                await application.bot.send_message(chat_id=admin_id, text=msg)
-            except:
-                pass
-    except:
-        pass
-
 async def ensure_user(user_id, username, invited_by=None):
     try:
         row = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,), fetchone=True)
         if not row:
             await db_execute("INSERT INTO users (user_id, username, invited_by, is_agent, is_new_user) VALUES (%s, %s, %s, FALSE, TRUE)", (user_id, username, invited_by))
-            await notify_admin_new_user(user_id, username, invited_by)
+            # دیگر پیام ثبت‌نام جدید برای ادمین فرستاده نمی‌شود
             if invited_by and invited_by != user_id:
                 await add_balance(invited_by, 15000)
         else:
@@ -390,7 +415,7 @@ async def unset_user_agent(user_id):
     except:
         pass
 
-async def add_payment(user_id, amount, ptype, payment_method, description="", coupon_code=None, volume=None):
+async def add_payment(user_id, amount, ptype, payment_method, description="", coupon_code=None):
     try:
         query = "INSERT INTO payments (user_id, amount, status, type, payment_method, description) VALUES (%s, %s, 'pending', %s, %s, %s) RETURNING id"
         new_id = await db_execute(query, (user_id, amount, ptype, payment_method, description), returning=True)
@@ -466,6 +491,20 @@ async def mark_coupon_used(code):
         await db_execute("UPDATE coupons SET is_used = TRUE WHERE code = %s", (code,))
     except:
         pass
+
+async def clear_all_database():
+    """پاک کردن تمام دیتابیس (به جز جدول وضعیت ربات)"""
+    try:
+        await db_execute("DELETE FROM config_pool")
+        await db_execute("DELETE FROM coupons")
+        await db_execute("DELETE FROM subscriptions")
+        await db_execute("DELETE FROM payments")
+        await db_execute("DELETE FROM users")
+        logging.info("All database tables cleared")
+        return True
+    except Exception as e:
+        logging.error(f"Error clearing database: {e}")
+        return False
 
 async def remove_user_from_db(user_id):
     try:
@@ -656,9 +695,11 @@ async def periodic_pending_check(bot):
     while True:
         try:
             await asyncio.sleep(30)
-            pending_subs = await get_pending_subscriptions()
-            for sub in pending_subs:
-                await send_config_to_user(sub['subscription_id'], sub['user_id'], sub['volume'], sub['plan'], bot)
+            # بررسی وضعیت ربات - اگر خاموش است، فقط برای ادمین‌ها کار می‌کند
+            if await get_bot_status():  # اگر ربات روشن است
+                pending_subs = await get_pending_subscriptions()
+                for sub in pending_subs:
+                    await send_config_to_user(sub['subscription_id'], sub['user_id'], sub['volume'], sub['plan'], bot)
         except Exception as e:
             logging.error(f"Error in periodic check: {e}")
 
@@ -677,7 +718,9 @@ async def set_bot_commands():
             BotCommand(command="/restore", description="بازیابی پشتیبان"),
             BotCommand(command="/remove_user", description="حذف کاربر"),
             BotCommand(command="/cleardb", description="پاکسازی دیتابیس"),
-            BotCommand(command="/debug_subscriptions", description="بررسی اشتراک‌ها")
+            BotCommand(command="/debug_subscriptions", description="بررسی اشتراک‌ها"),
+            BotCommand(command="/shutdown", description="خاموش کردن ربات (فقط برای کاربران عادی)"),
+            BotCommand(command="/startup", description="روشن کردن ربات برای کاربران عادی")
         ]
         await application.bot.set_my_commands(public_commands)
         for admin_id in ADMIN_IDS:
@@ -755,11 +798,53 @@ async def remove_user_command(update, context):
     await update.message.reply_text("🆔 آیدی کاربر را وارد کنید:")
     user_states[update.effective_user.id] = "awaiting_user_id_for_removal"
 
-async def clear_db(update, context):
+async def clear_db_command(update, context):
+    """پاک کردن کامل دیتابیس"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ دسترسی غیرمجاز.")
         return
-    await update.message.reply_text("✅ دیتابیس پاکسازی شد.")
+    
+    await update.message.reply_text("⚠️ هشدار! در حال پاک کردن کامل دیتابیس...\nاین عملیات غیرقابل بازگشت است.")
+    
+    success = await clear_all_database()
+    
+    if success:
+        await update.message.reply_text("✅ دیتابیس با موفقیت پاکسازی شد.\n\nتمام کاربران، پرداخت‌ها، اشتراک‌ها، کدهای تخفیف و کانفیگ‌های ذخیره شده حذف شدند.")
+    else:
+        await update.message.reply_text("❌ خطا در پاکسازی دیتابیس.")
+
+async def shutdown_command(update, context):
+    """خاموش کردن ربات فقط برای کاربران عادی (ادمین‌ها همچنان دسترسی دارند)"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ دسترسی غیرمجاز.")
+        return
+    
+    if not await get_bot_status():
+        await update.message.reply_text("🔴 ربات در حال حاضر خاموش است.")
+        return
+    
+    await set_bot_status(False)
+    await update.message.reply_text(
+        "🔴 ربات برای کاربران عادی خاموش شد.\n\n"
+        "✅ ادمین‌ها همچنان به ربات دسترسی دارند.\n"
+        "🟢 برای روشن کردن مجدد از دستور /startup استفاده کنید."
+    )
+
+async def startup_command(update, context):
+    """روشن کردن ربات برای کاربران عادی"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ دسترسی غیرمجاز.")
+        return
+    
+    if await get_bot_status():
+        await update.message.reply_text("🟢 ربات در حال حاضر روشن است.")
+        return
+    
+    await set_bot_status(True)
+    await update.message.reply_text(
+        "🟢 ربات برای کاربران عادی روشن شد.\n\n"
+        "✅ کاربران می‌توانند از ربات استفاده کنند."
+    )
 
 async def debug_subscriptions(update, context):
     if not is_admin(update.effective_user.id):
@@ -770,6 +855,15 @@ async def debug_subscriptions(update, context):
 # ---------- هندلرهای اصلی ----------
 async def start(update, context):
     user = update.effective_user
+    
+    # بررسی دسترسی کاربر (ادمین همیشه می‌تواند وارد شود)
+    if not await is_bot_available_for_user(user.id):
+        await update.message.reply_text(
+            "🔴 ربات در حال حاضر برای کاربران عادی غیرفعال است.\n\n"
+            "لطفاً بعداً مجدد تلاش کنید."
+        )
+        return
+    
     if not await is_user_member(user.id):
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"),
@@ -800,6 +894,14 @@ async def check_membership_callback(update, context):
     query = update.callback_query
     await query.answer()
     user = update.effective_user
+    
+    # بررسی دسترسی کاربر (ادمین همیشه می‌تواند وارد شود)
+    if not await is_bot_available_for_user(user.id):
+        await query.edit_message_text(
+            "🔴 ربات در حال حاضر برای کاربران عادی غیرفعال است.\n\n"
+            "لطفاً بعداً مجدد تلاش کنید."
+        )
+        return
     
     if await is_user_member(user.id):
         invited_by = context.user_data.get("invited_by")
@@ -1108,6 +1210,14 @@ async def handle_remove_user(update, context, user_id, text):
         await update.message.reply_text("⚠️ آیدی نامعتبر.", reply_markup=get_back_keyboard())
 
 async def handle_normal_commands(update, context, user_id, text):
+    # بررسی دسترسی کاربر (ادمین همیشه می‌تواند استفاده کند)
+    if not await is_bot_available_for_user(user_id):
+        await update.message.reply_text(
+            "🔴 ربات در حال حاضر برای کاربران عادی غیرفعال است.\n\n"
+            "لطفاً بعداً مجدد تلاش کنید."
+        )
+        return
+    
     if text == "💎 کیف پول":
         await update.message.reply_text("💎 بخش کیف پول:", reply_markup=get_balance_keyboard())
     elif text == "👀 مشاهده کیف پول":
@@ -1262,7 +1372,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states.pop(user_id, None)
         return
     
-    # هندلرهای ادمین
+    # هندلرهای ادمین (ادمین‌ها همیشه دسترسی دارند حتی اگر ربات خاموش باشد)
     if is_admin(user_id):
         if state == "awaiting_backup_file":
             await update.message.reply_text("✅ فایل پشتیبان دریافت شد.", reply_markup=get_main_keyboard())
@@ -1353,7 +1463,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states.pop(user_id, None)
             return
     
-    # هندلرهای عادی کاربران
+    # هندلرهای عادی کاربران (فقط اگر ربات روشن باشد)
+    if not await is_bot_available_for_user(user_id):
+        # به کاربر عادی اطلاع بده که ربات خاموش است
+        if text not in ["بازگشت به منو", "↩️ بازگشت به منو"]:
+            await update.message.reply_text(
+                "🔴 ربات در حال حاضر برای کاربران عادی غیرفعال است.\n\n"
+                "لطفاً بعداً مجدد تلاش کنید."
+            )
+        return
+    
     if state and state.startswith("awaiting_deposit_receipt_"):
         payment_id = int(state.split("_")[-1])
         await process_payment_receipt(update, context, user_id, payment_id, "شارژ کیف پول")
@@ -1400,8 +1519,10 @@ application.add_handler(CommandHandler("add_config", add_config_command))
 application.add_handler(CommandHandler("backup", backup_command))
 application.add_handler(CommandHandler("restore", restore_command))
 application.add_handler(CommandHandler("remove_user", remove_user_command))
-application.add_handler(CommandHandler("cleardb", clear_db))
+application.add_handler(CommandHandler("cleardb", clear_db_command))
 application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
+application.add_handler(CommandHandler("shutdown", shutdown_command))
+application.add_handler(CommandHandler("startup", startup_command))
 application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 application.add_handler(CallbackQueryHandler(admin_callback_handler))
 
@@ -1435,9 +1556,13 @@ async def on_startup():
         
         periodic_task = asyncio.create_task(periodic_pending_check(application.bot))
         
+        status_text = "روشن" if bot_is_active else "خاموش"
         for admin_id in ADMIN_IDS:
             try:
-                await application.bot.send_message(chat_id=admin_id, text="🤖 ربات کاوه وی‌پی‌ان با موفقیت راه‌اندازی شد!\n✅ سیستم مدیریت خودکار کانفیگ فعال است.\n✅ داده‌های قبلی حفظ شد.")
+                await application.bot.send_message(
+                    chat_id=admin_id, 
+                    text=f"🤖 ربات کاوه وی‌پی‌ان با موفقیت راه‌اندازی شد!\n✅ سیستم مدیریت خودکار کانفیگ فعال است.\n✅ وضعیت ربات: {status_text}\n✅ داده‌های قبلی حفظ شد."
+                )
             except:
                 pass
         logging.info("✅ Bot started successfully")
