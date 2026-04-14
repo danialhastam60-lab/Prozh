@@ -11,7 +11,7 @@ from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 )
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, JobQueue
+    Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 )
 import psycopg2
 from psycopg2 import pool
@@ -67,6 +67,13 @@ def english_number(persian_str):
 def format_price(price):
     """فرمت قیمت با کاما و اعداد فارسی"""
     return persian_number(f"{price:,}")
+
+def extract_volume_from_plan(plan_text: str) -> int:
+    """استخراج حجم از متن پلن (مثلاً '⚡ کانفیگ پر سرعت | ۱ گیگ' -> 1)"""
+    match = re.search(r'(\d+)', plan_text)
+    if match:
+        return int(english_number(match.group(1)))
+    return 1
 
 # ---------- endpoint سلامت ----------
 @app.get("/")
@@ -505,7 +512,6 @@ async def add_config_to_pool(volume: int, config_text: str, admin_id: int) -> bo
         return False
 
 async def add_multiple_configs_to_pool(volume: int, configs_text: List[str], admin_id: int) -> Tuple[int, int]:
-    """اضافه کردن چند کانفیگ به استخر، برگرداندن تعداد موفق و ناموفق"""
     success_count = 0
     fail_count = 0
     for config_text in configs_text:
@@ -529,7 +535,6 @@ async def get_available_config(volume: int) -> Optional[Dict]:
         return None
 
 async def get_available_volumes() -> List[int]:
-    """دریافت لیست حجم‌هایی که حداقل یک کانفیگ موجود دارند"""
     try:
         rows = await db_execute(
             "SELECT DISTINCT volume FROM config_pool WHERE is_sold = FALSE ORDER BY volume",
@@ -624,6 +629,16 @@ async def get_pending_subscriptions() -> List[Dict]:
     except Exception as e:
         logging.error(f"Error getting pending subscriptions: {e}")
         return []
+
+# ---------- وظیفه دوره‌ای با asyncio ----------
+async def periodic_pending_check():
+    """بررسی دوره‌ای اشتراک‌های در انتظار (هر 30 ثانیه)"""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            await process_pending_subscriptions(application.context_types.context())
+        except Exception as e:
+            logging.error(f"Error in periodic check: {e}")
 
 # ---------- دستورات ادمین ----------
 async def set_bot_commands():
@@ -756,7 +771,6 @@ async def start_with_param(update, context):
     await start(update, context)
 
 async def check_membership_callback(update, context):
-    """بررسی عضویت کاربر در کانال بعد از زدن دکمه تایید"""
     query = update.callback_query
     await query.answer()
     user = update.effective_user
@@ -887,8 +901,7 @@ async def handle_subscription_plan(update, context, user_id, text):
             return
         
         total_amount = PRICE_PER_GB * volume
-        plan_name = f"⚡ {CONFIG_NAME} | {persian_number(volume)} گیگ"
-        # ذخیره volume به صورت عدد انگلیسی در state
+        plan_name = f"{CONFIG_NAME} | {volume} گیگ"  # بدون ایموجی و با عدد انگلیسی برای state
         user_states[user_id] = f"awaiting_coupon_code_{total_amount}_{plan_name}_{volume}"
         await update.message.reply_text(
             f"✅ {persian_number(volume)} گیگ {CONFIG_NAME} با مبلغ {format_price(total_amount)} تومان\n\nبرای ادامه روی 'ادامه' کلیک کنید:",
@@ -899,9 +912,17 @@ async def handle_subscription_plan(update, context, user_id, text):
 
 async def handle_coupon_code(update, context, user_id, state, text):
     parts = state.split("_")
+    # ساختار: awaiting_coupon_code_{amount}_{plan_name}_{volume}
+    if len(parts) < 5:
+        await update.message.reply_text("⚠️ خطا در پردازش درخواست. لطفاً مجدد تلاش کنید.", reply_markup=get_main_keyboard())
+        user_states.pop(user_id, None)
+        return
+    
     amount = int(parts[3])
-    plan = "_".join(parts[4:-1]) if len(parts) > 5 else "_".join(parts[4:])
-    volume = int(parts[-1]) if len(parts) > 5 else 1
+    # plan_name ممکن است شامل زیرخط باشد، بنابراین باید از آخر یکی را کم کنیم
+    volume = int(parts[-1])
+    plan_parts = parts[4:-1]
+    plan = "_".join(plan_parts)
     
     if text == "ادامه":
         user_states[user_id] = f"awaiting_payment_method_{amount}_{plan}_{volume}"
@@ -921,20 +942,20 @@ async def handle_payment_method(update, context, user_id, text):
     state = user_states.get(user_id)
     if not state:
         return
+    
     try:
         parts = state.split("_")
-        # amount, plan, volume, coupon_code
-        if len(parts) < 5:
+        
+        # پیدا کردن position های صحیح
+        if len(parts) < 6:
             await update.message.reply_text("⚠️ خطا در پردازش درخواست. لطفاً مجدد تلاش کنید.", reply_markup=get_main_keyboard())
             user_states.pop(user_id, None)
             return
         
         amount = int(parts[3])
         
-        # پیدا کردن position های صحیح
-        # ساختار: awaiting_payment_method_{amount}_{plan}_{volume}_{coupon_code?}
-        # plan ممکن است شامل زیرخط باشد، بنابراین باید از آخر شروع کنیم
-        if len(parts) >= 6 and parts[-1] and parts[-1] not in ["card_to_card", "balance"]:
+        # بررسی وجود کد تخفیف
+        if len(parts) >= 7 and parts[-1] and parts[-1] not in ["card_to_card", "balance"] and not parts[-1].isdigit():
             # با کد تخفیف
             coupon_code = parts[-1]
             volume = int(parts[-2])
@@ -974,6 +995,7 @@ async def handle_payment_method(update, context, user_id, text):
                     await update_payment_status(payment_id, "approved")
                     await update.message.reply_text("✅ خرید با موفقیت انجام شد. کانفیگ برای شما ارسال خواهد شد.", reply_markup=get_main_keyboard())
                     await context.bot.send_message(ADMIN_ID, f"🛍️ کاربر {user_id} سرویس {plan} را از کیف پول خود خریداری کرد.")
+                    # پردازش مستقیم (بدون انتظار برای تایید)
                     await process_pending_subscriptions(context)
                     user_states.pop(user_id, None)
             else:
@@ -1019,7 +1041,7 @@ async def process_pending_subscriptions(context):
             await mark_config_as_sold(config['id'], sub['user_id'])
             await context.bot.send_message(
                 sub['user_id'],
-                f"✅ اشتراک {sub['plan']} شما فعال شد!\n\n🔐 کانفیگ شما:\n```\n{config['config_text']}\n```",
+                f"✅ اشتراک شما فعال شد!\n\n🔐 کانفیگ شما:\n```\n{config['config_text']}\n```",
                 parse_mode="Markdown"
             )
             await context.bot.send_message(
@@ -1368,25 +1390,13 @@ async def telegram_webhook(request: Request):
         logging.error(f"Error in webhook: {e}")
         return {"ok": False, "error": str(e)}
 
-# ---------- تابع بررسی دوره ای اشتراک‌های در انتظار ----------
-async def periodic_pending_check(context: ContextTypes.DEFAULT_TYPE):
-    await process_pending_subscriptions(context)
-
-# ---------- تنظیم JobQueue ----------
-def setup_job_queue():
-    """تنظیم JobQueue برای اجرای دوره‌ای وظایف"""
-    # ایجاد JobQueue جدید
-    job_queue = JobQueue()
-    job_queue.set_application(application)
-    job_queue.start()
-    application.job_queue = job_queue
-    # هر 30 ثانیه یکبار بررسی کن
-    application.job_queue.run_repeating(periodic_pending_check, interval=30, first=10)
-    logging.info("JobQueue setup completed")
+# ---------- متغیر برای کنترل تسک دوره‌ای ----------
+periodic_task = None
 
 # ---------- lifecycle ----------
 @app.on_event("startup")
 async def on_startup():
+    global periodic_task
     try:
         init_db_pool()
         await create_tables()
@@ -1395,7 +1405,10 @@ async def on_startup():
         await application.bot.set_webhook(url=WEBHOOK_URL)
         logging.info(f"✅ Webhook set: {WEBHOOK_URL}")
         await set_bot_commands()
-        setup_job_queue()
+        
+        # راه‌اندازی تسک دوره‌ای با asyncio (بدون نیاز به JobQueue)
+        periodic_task = asyncio.create_task(periodic_pending_check())
+        
         await application.bot.send_message(chat_id=ADMIN_ID, text="🤖 ربات کاوه وی‌پی‌ان با موفقیت راه‌اندازی شد!\n✅ سیستم مدیریت خودکار کانفیگ فعال است.")
         logging.info("✅ Bot started successfully")
     except Exception as e:
@@ -1403,9 +1416,10 @@ async def on_startup():
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    global periodic_task
     try:
-        if application.job_queue:
-            application.job_queue.stop()
+        if periodic_task:
+            periodic_task.cancel()
         await application.stop()
         await application.shutdown()
         close_db_pool()
