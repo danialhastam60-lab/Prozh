@@ -634,21 +634,20 @@ async def get_pending_subscriptions() -> List[Dict]:
         logging.error(f"Error getting pending subscriptions: {e}")
         return []
 
-async def send_config_to_user(subscription_id: int, user_id: int, volume: int, plan: str, context) -> bool:
+async def send_config_to_user(subscription_id: int, user_id: int, volume: int, plan: str, bot) -> bool:
     """ارسال کانفیگ به کاربر و حذف آن از استخر"""
     config = await get_available_config(volume)
     if config:
         await update_subscription_config(subscription_id, config['config_text'])
         await mark_config_as_sold(config['id'], user_id)
-        await context.bot.send_message(
+        await bot.send_message(
             user_id,
             f"✅ اشتراک {plan} شما فعال شد!\n\n🔐 کانفیگ شما:\n```\n{config['config_text']}\n```",
             parse_mode="Markdown"
         )
-        # اطلاع به ادمین‌ها
         for admin_id in ADMIN_IDS:
             try:
-                await context.bot.send_message(
+                await bot.send_message(
                     admin_id,
                     f"✅ کانفیگ {persian_number(volume)} گیگ به طور خودکار برای کاربر {user_id} ارسال شد."
                 )
@@ -656,10 +655,9 @@ async def send_config_to_user(subscription_id: int, user_id: int, volume: int, p
                 pass
         return True
     else:
-        # اطلاع به ادمین‌ها
         for admin_id in ADMIN_IDS:
             try:
-                await context.bot.send_message(
+                await bot.send_message(
                     admin_id,
                     f"⚠️ کاربر {user_id} درخواست {persian_number(volume)} گیگ {CONFIG_NAME} دارد اما کانفیگ موجود نیست!"
                 )
@@ -668,14 +666,14 @@ async def send_config_to_user(subscription_id: int, user_id: int, volume: int, p
         return False
 
 # ---------- وظیفه دوره‌ای با asyncio ----------
-async def periodic_pending_check():
+async def periodic_pending_check(bot):
     """بررسی دوره‌ای اشتراک‌های در انتظار (هر 30 ثانیه)"""
     while True:
         try:
             await asyncio.sleep(30)
             pending_subs = await get_pending_subscriptions()
             for sub in pending_subs:
-                await send_config_to_user(sub['subscription_id'], sub['user_id'], sub['volume'], sub['plan'], application.context_types.context())
+                await send_config_to_user(sub['subscription_id'], sub['user_id'], sub['volume'], sub['plan'], bot)
         except Exception as e:
             logging.error(f"Error in periodic check: {e}")
 
@@ -1035,7 +1033,10 @@ async def handle_payment_method(update, context, user_id, text):
                             await context.bot.send_message(admin_id, f"🛍️ کاربر {user_id} سرویس {plan} را از کیف پول خود خریداری کرد.")
                         except:
                             pass
-                    await send_config_to_user(payment_id, user_id, volume, plan, context)
+                    # ارسال خودکار کانفیگ
+                    sub = await db_execute("SELECT id FROM subscriptions WHERE payment_id = %s", (payment_id,), fetchone=True)
+                    if sub:
+                        await send_config_to_user(sub[0], user_id, volume, plan, context.bot)
                     user_states.pop(user_id, None)
             else:
                 await update.message.reply_text(f"⚠️ موجودی کیف پول شما ({format_price(balance)} تومان) کافی نمی‌باشد.", reply_markup=get_main_keyboard())
@@ -1078,42 +1079,6 @@ async def process_payment_receipt(update, context, user_id, payment_id, receipt_
     except Exception as e:
         logging.error(f"Error processing receipt: {e}")
         await update.message.reply_text("⚠️ خطا در ارسال فیش.", reply_markup=get_main_keyboard())
-
-async def send_config_to_user(subscription_id: int, user_id: int, volume: int, plan: str, context) -> bool:
-    """ارسال کانفیگ به کاربر و حذف آن از استخر"""
-    config = await get_available_config(volume)
-    if config:
-        await update_subscription_config(subscription_id, config['config_text'])
-        await mark_config_as_sold(config['id'], user_id)
-        await context.bot.send_message(
-            user_id,
-            f"✅ اشتراک {plan} شما فعال شد!\n\n🔐 کانفیگ شما:\n```\n{config['config_text']}\n```",
-            parse_mode="Markdown"
-        )
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    admin_id,
-                    f"✅ کانفیگ {persian_number(volume)} گیگ به طور خودکار برای کاربر {user_id} ارسال شد."
-                )
-            except:
-                pass
-        return True
-    else:
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    admin_id,
-                    f"⚠️ کاربر {user_id} درخواست {persian_number(volume)} گیگ {CONFIG_NAME} دارد اما کانفیگ موجود نیست!"
-                )
-            except:
-                pass
-        return False
-
-async def process_pending_subscriptions(context):
-    pending_subs = await get_pending_subscriptions()
-    for sub in pending_subs:
-        await send_config_to_user(sub['subscription_id'], sub['user_id'], sub['volume'], sub['plan'], context)
 
 # ---------- هندلرهای پیام عمومی ----------
 async def handle_coupon_recipient(update, context, user_id, state, text):
@@ -1259,13 +1224,15 @@ async def admin_callback_handler(update, context):
                 await query.edit_message_text("✅ پرداخت تایید شد.")
             elif ptype == "buy_subscription":
                 await context.bot.send_message(uid, f"✅ پرداخت شما تایید شد. کد پیگیری: #{payment_id}")
+                # حذف دکمه‌های کیبورد
                 await query.edit_message_reply_markup(reply_markup=None)
-                await query.edit_message_text("✅ پرداخت تایید شد. در حال ارسال کانفیگ...")
+                # ارسال پیام جدید به جای ویرایش
+                await query.message.reply_text("✅ پرداخت تایید شد. در حال ارسال کانفیگ...")
                 # ارسال خودکار کانفیگ
                 sub = await db_execute("SELECT id, volume, plan FROM subscriptions WHERE payment_id = %s", (payment_id,), fetchone=True)
                 if sub:
                     subscription_id, volume, plan = sub
-                    await send_config_to_user(subscription_id, uid, volume, plan, context)
+                    await send_config_to_user(subscription_id, uid, volume, plan, context.bot)
         elif data.startswith("reject_payment_"):
             payment_id = int(data.split("_")[2])
             await update_payment_status(payment_id, "rejected")
@@ -1273,7 +1240,10 @@ async def admin_callback_handler(update, context):
             if payment:
                 user_id = payment[0]
                 await context.bot.send_message(user_id, "❌ متأسفانه پرداخت شما تایید نشد. لطفاً مجدداً تلاش کنید.")
-            await query.edit_message_text("❌ پرداخت رد شد.")
+            # حذف دکمه‌های کیبورد
+            await query.edit_message_reply_markup(reply_markup=None)
+            # ارسال پیام جدید به جای ویرایش
+            await query.message.reply_text("❌ پرداخت رد شد.")
         elif data == "admin_balance_action":
             await query.edit_message_text("🆔 آیدی کاربر را وارد کنید:")
             user_states[ADMIN_IDS[0]] = "awaiting_admin_user_id_for_balance"
@@ -1287,7 +1257,11 @@ async def admin_callback_handler(update, context):
             await check_membership_callback(update, context)
     except Exception as e:
         logging.error(f"Error in callback: {e}")
-        await query.edit_message_text("⚠️ خطا در پردازش درخواست.")
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text("⚠️ خطا در پردازش درخواست.")
+        except:
+            pass
 
 # ---------- هندلر اصلی پیام‌ها ----------
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1471,8 +1445,8 @@ async def on_startup():
         logging.info(f"✅ Webhook set: {WEBHOOK_URL}")
         await set_bot_commands()
         
-        # راه‌اندازی تسک دوره‌ای با asyncio
-        periodic_task = asyncio.create_task(periodic_pending_check())
+        # راه‌اندازی تسک دوره‌ای با asyncio (ارسال bot به جای context)
+        periodic_task = asyncio.create_task(periodic_pending_check(application.bot))
         
         for admin_id in ADMIN_IDS:
             try:
