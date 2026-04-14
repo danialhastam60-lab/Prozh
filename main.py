@@ -138,7 +138,7 @@ async def db_execute(query, params=(), fetch=False, fetchone=False, returning=Fa
         logging.error(f"Async database error: {e}")
         raise
 
-# ---------- ساخت جداول (بدون پاک کردن) ----------
+# ---------- ساخت جداول ----------
 CREATE_USERS_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY,
@@ -221,7 +221,6 @@ WHERE start_date IS NULL OR duration_days IS NULL;
 """
 
 async def create_tables():
-    """ایجاد جداول در صورت عدم وجود - بدون پاک کردن داده‌های قبلی"""
     try:
         await db_execute(CREATE_USERS_SQL)
         await db_execute(CREATE_PAYMENTS_SQL)
@@ -391,7 +390,7 @@ async def unset_user_agent(user_id):
     except:
         pass
 
-async def add_payment(user_id, amount, ptype, payment_method, description="", coupon_code=None):
+async def add_payment(user_id, amount, ptype, payment_method, description="", coupon_code=None, volume=None):
     try:
         query = "INSERT INTO payments (user_id, amount, status, type, payment_method, description) VALUES (%s, %s, 'pending', %s, %s, %s) RETURNING id"
         new_id = await db_execute(query, (user_id, amount, ptype, payment_method, description), returning=True)
@@ -621,7 +620,6 @@ async def get_pending_subscriptions() -> List[Dict]:
         return []
 
 async def send_config_to_user(subscription_id: int, user_id: int, volume: int, plan: str, bot) -> bool:
-    """ارسال کانفیگ به کاربر و حذف آن از استخر"""
     config = await get_available_config(volume)
     if config:
         await update_subscription_config(subscription_id, config['config_text'])
@@ -631,10 +629,9 @@ async def send_config_to_user(subscription_id: int, user_id: int, volume: int, p
             f"✅ اشتراک {plan} شما فعال شد!\n\n🔐 کانفیگ شما:\n```\n{config['config_text']}\n```",
             parse_mode="Markdown"
         )
-        # فقط به ادمین‌ها اطلاع بده (نه به کاربر)
         for admin_id in ADMIN_IDS:
             try:
-                if user_id not in ADMIN_IDS:  # اگر کاربر ادمین نبود
+                if user_id not in ADMIN_IDS:
                     await bot.send_message(
                         admin_id,
                         f"✅ کانفیگ {persian_number(volume)} گیگ برای کاربر {user_id} ارسال شد."
@@ -643,7 +640,6 @@ async def send_config_to_user(subscription_id: int, user_id: int, volume: int, p
                 pass
         return True
     else:
-        # فقط اگر کاربر ادمین نبود، پیام خطا بفرست (ادمین برای تست می‌خواد)
         if user_id not in ADMIN_IDS:
             for admin_id in ADMIN_IDS:
                 try:
@@ -1039,12 +1035,21 @@ async def process_payment_receipt(update, context, user_id, payment_id, receipt_
         if not payment:
             await update.message.reply_text("⚠️ درخواست پرداخت یافت نشد.", reply_markup=get_main_keyboard())
             return
+        
         amount, description = payment
-        caption = f"💳 فیش پرداختی از کاربر {user_id}:\n💰 مبلغ: {format_price(amount)} تومان\n📦 نوع: {receipt_type}"
+        
+        # دریافت حجم از subscription
+        sub = await db_execute("SELECT volume FROM subscriptions WHERE payment_id = %s", (payment_id,), fetchone=True)
+        volume = sub[0] if sub else 0
+        volume_text = f"📦 حجم: {persian_number(volume)} گیگ" if volume > 0 else ""
+        
+        caption = f"💳 فیش پرداختی از کاربر {user_id}:\n💰 مبلغ: {format_price(amount)} تومان\n{volume_text}\n📦 نوع: {receipt_type}"
+        
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ تایید", callback_data=f"approve_payment_{payment_id}"),
              InlineKeyboardButton("❌ رد", callback_data=f"reject_payment_{payment_id}")]
         ])
+        
         if update.message.photo:
             for admin_id in ADMIN_IDS:
                 try:
