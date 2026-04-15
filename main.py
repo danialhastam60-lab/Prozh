@@ -19,7 +19,7 @@ from psycopg2 import pool
 # ---------- تنظیمات اولیه ----------
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = "@vpnkaveh"
-ADMIN_IDS = [5542927340, 6778206989]
+ADMIN_IDS = [5542927340, 6778206989, 5984875653]
 SUPPORT_USERNAME = "@kavehpro"
 BANK_CARD = "6274121773306105"
 BANK_OWNER = "کاوه"
