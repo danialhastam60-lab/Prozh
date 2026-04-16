@@ -1561,7 +1561,7 @@ async def on_startup():
             try:
                 await application.bot.send_message(
                     chat_id=admin_id, 
-                    text=f"🤖 ربات کاوه وی‌پی‌ان با موفقیت راه‌اندازی شد!\n✅ سیستم مدیریت خودکار کانفیگ فعال است.\n✅ وضعیت ربات: {status_text}\n✅ داده‌های قبلی حفظ شد."
+                    text=f"🤖 ربات فونیکس ‌تانل با موفقیت راه‌اندازی شد!\n✅ سیستم مدیریت خودکار کانفیگ فعال است.\n✅ وضعیت ربات: {status_text}\n✅ داده‌های قبلی حفظ شد."
                 )
             except:
                 pass
