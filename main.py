@@ -19,7 +19,7 @@ from psycopg2 import pool
 # ---------- تنظیمات اولیه ----------
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = "@PhoenixTunnel"
-ADMIN_IDS = [5542927340, 5984875653]
+ADMIN_IDS = [6056483071, 5984875653]
 SUPPORT_USERNAME = "@GtaVOwner"
 BANK_CARD = "6274121773306105"
 BANK_OWNER = "فونیکس"
