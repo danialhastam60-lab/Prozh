@@ -876,7 +876,7 @@ async def start(update, context):
         return
     invited_by = context.user_data.get("invited_by")
     await ensure_user(user.id, user.username or "", invited_by)
-    await update.message.reply_text("🌐 به فروشگاه کاوه وی‌پی‌ان خوش آمدید!", reply_markup=get_main_keyboard())
+    await update.message.reply_text("🌐 به فروشگاه فونیکس تانل‌‌ خوش آمدید!", reply_markup=get_main_keyboard())
     user_states.pop(user.id, None)
 
 async def start_with_param(update, context):
