@@ -906,7 +906,7 @@ async def check_membership_callback(update, context):
     if await is_user_member(user.id):
         invited_by = context.user_data.get("invited_by")
         await ensure_user(user.id, user.username or "", invited_by)
-        await query.edit_message_text("✅ عضویت شما تأیید شد!\n🌐 به فروشگاه کاوه وی‌پی‌ان خوش آمدید!")
+        await query.edit_message_text("✅ عضویت شما تأیید شد!\n🌐 به فروشگاه فونیکس تانل‌‌ خوش آمدید!")
         await query.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user.id, None)
     else:
