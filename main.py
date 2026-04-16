@@ -18,11 +18,11 @@ from psycopg2 import pool
 
 # ---------- تنظیمات اولیه ----------
 TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = "@vpnkaveh"
-ADMIN_IDS = [5542927340, 6778206989, 5984875653]
-SUPPORT_USERNAME = "@kavehpro"
+CHANNEL_USERNAME = "@PhoenixTunnel"
+ADMIN_IDS = [5542927340, 5984875653]
+SUPPORT_USERNAME = "@GtaVOwner"
 BANK_CARD = "6274121773306105"
-BANK_OWNER = "کاوه"
+BANK_OWNER = "فونیکس"
 PRICE_PER_GB = 450000
 CONFIG_NAME = "کانفیگ پر سرعت"
 
