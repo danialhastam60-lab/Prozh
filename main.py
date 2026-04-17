@@ -879,7 +879,7 @@ async def start(update, context):
     
     invited_by = context.user_data.get("invited_by")
     await ensure_user(user.id, user.username or "", invited_by)
-    await update.message.reply_text("🌐 به فروشگاه فونیکس تانل‌‌ خوش آمدید!", reply_markup=get_main_keyboard())
+    await update.message.reply_text("🌐 به فروشگاه فونیکس تانل خوش آمدید!", reply_markup=get_main_keyboard())
     user_states.pop(user.id, None)
 
 async def start_with_param(update, context):
@@ -910,7 +910,9 @@ async def check_membership_callback(update, context):
     if is_member:
         invited_by = context.user_data.get("invited_by")
         await ensure_user(user.id, user.username or "", invited_by)
-        await query.edit_message_text("✅ عضویت شما تأیید شد!\n🌐 به فروشگاه فونیکس تانل‌‌ خوش آمدید!")
+        # ویرایش پیام قبلی و حذف دکمه‌ها
+        await query.edit_message_text("✅ عضویت شما تأیید شد!\n🌐 به فروشگاه فونیکس تانل خوش آمدید!")
+        # ارسال منوی اصلی به عنوان پیام جدید
         await query.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user.id, None)
     else:
@@ -1332,10 +1334,18 @@ async def handle_admin_agent_type(update, context, user_id, text):
 async def admin_callback_handler(update, context):
     query = update.callback_query
     await query.answer()
+    
+    data = query.data
+    
+    # هندلر اختصاصی برای check_membership
+    if data == "check_membership":
+        await check_membership_callback(update, context)
+        return
+    
     if not is_admin(update.effective_user.id):
         await query.edit_message_text("⛔ دسترسی غیرمجاز.")
         return
-    data = query.data
+    
     try:
         if data.startswith("approve_payment_"):
             payment_id = int(data.split("_")[2])
@@ -1376,8 +1386,6 @@ async def admin_callback_handler(update, context):
         elif data == "admin_remove_user_action":
             await query.edit_message_text("🆔 آیدی کاربر را وارد کنید:")
             user_states[ADMIN_IDS[0]] = "awaiting_user_id_for_removal"
-        elif data == "check_membership":
-            await check_membership_callback(update, context)
     except Exception as e:
         logging.error(f"Error in callback: {e}")
         try:
