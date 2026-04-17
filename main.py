@@ -26,10 +26,10 @@ BANK_OWNER = "آقایی"
 
 # قیمت‌های جدید
 PRICES = {
-    1: 450000,    # 450 هزار تومان
-    2: 800000,    # 800 هزار تومان
-    5: 1800000,   # 1.800.000 تومان
-    10: 3600000   # 3.600.000 تومان
+    1: 450000,    # 450,000 تومان
+    2: 800000,    # 800,000 تومان
+    5: 1800000,   # 1,800,000 تومان
+    10: 3600000   # 3,600,000 تومان
 }
 CONFIG_NAME = "کانفیگ پر سرعت"
 
@@ -66,9 +66,7 @@ def english_number(persian_str):
     return result
 
 def format_price(price):
-    if price >= 1000000:
-        toman = price // 1000
-        return persian_number(f"{toman:,}").replace(',', '.') + " هزار تومان"
+    # فرمت کردن اعداد با کاما جداکننده هزارگان
     return persian_number(f"{price:,}") + " تومان"
 
 def is_admin(user_id: int) -> bool:
@@ -303,10 +301,10 @@ def get_back_keyboard():
 
 def get_subscription_keyboard():
     keyboard = [
-        [KeyboardButton(f"{persian_number(1)} گیگ | {format_price(PRICES[1])} | آیپی 🇹🇷")],
-        [KeyboardButton(f"{persian_number(2)} گیگ | {format_price(PRICES[2])} | آیپی 🇹🇷")],
-        [KeyboardButton(f"{persian_number(5)} گیگ | {format_price(PRICES[5])} | آیپی 🇹🇷")],
-        [KeyboardButton(f"{persian_number(10)} گیگ | {format_price(PRICES[10])} | آیپی 🇹🇷")],
+        [KeyboardButton(f"۱ گیگ | {format_price(PRICES[1])} | آیپی 🇹🇷")],
+        [KeyboardButton(f"۲ گیگ | {format_price(PRICES[2])} | آیپی 🇹🇷")],
+        [KeyboardButton(f"۵ گیگ | {format_price(PRICES[5])} | آیپی 🇹🇷")],
+        [KeyboardButton(f"۱۰ گیگ | {format_price(PRICES[10])} | آیپی 🇹🇷")],
         [KeyboardButton("↩️ بازگشت به منو")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -332,8 +330,8 @@ def get_admin_config_keyboard():
 
 def get_volume_selection_keyboard():
     keyboard = [
-        [KeyboardButton(f"{persian_number(1)} گیگ"), KeyboardButton(f"{persian_number(2)} گیگ")],
-        [KeyboardButton(f"{persian_number(5)} گیگ"), KeyboardButton(f"{persian_number(10)} گیگ")],
+        [KeyboardButton("۱ گیگ"), KeyboardButton("۲ گیگ")],
+        [KeyboardButton("۵ گیگ"), KeyboardButton("۱۰ گیگ")],
         [KeyboardButton("↩️ انصراف")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -960,15 +958,15 @@ async def handle_admin_config_action(update, context, user_id, text):
 
 async def handle_config_volume_selection(update, context, user_id, text):
     volume_map = {
-        f"{persian_number(1)} گیگ": 1,
-        f"{persian_number(2)} گیگ": 2,
-        f"{persian_number(5)} گیگ": 5,
-        f"{persian_number(10)} گیگ": 10
+        "۱ گیگ": 1,
+        "۲ گیگ": 2,
+        "۵ گیگ": 5,
+        "۱۰ گیگ": 10
     }
     if text in volume_map:
         volume = volume_map[text]
         user_states[user_id] = f"awaiting_config_text_{volume}"
-        await update.message.reply_text(f"🔐 لطفاً کانفیگ(های) {persian_number(volume)} گیگی را ارسال کنید.\n(هر کانفیگ در یک خط جداگانه)", reply_markup=get_back_keyboard())
+        await update.message.reply_text(f"🔐 لطفاً کانفیگ(های) {text} را ارسال کنید.\n(هر کانفیگ در یک خط جداگانه)", reply_markup=get_back_keyboard())
     elif text == "↩️ انصراف":
         await update.message.reply_text("⚙️ پنل مدیریت کانفیگ‌ها:", reply_markup=get_admin_config_keyboard())
         user_states.pop(user_id, None)
@@ -1007,10 +1005,10 @@ async def handle_config_text(update, context, user_id, state, text):
 # ---------- هندلرهای خرید و پرداخت ----------
 async def handle_subscription_plan(update, context, user_id, text):
     volume_map = {
-        f"{persian_number(1)} گیگ | {format_price(PRICES[1])} | آیپی 🇹🇷": 1,
-        f"{persian_number(2)} گیگ | {format_price(PRICES[2])} | آیپی 🇹🇷": 2,
-        f"{persian_number(5)} گیگ | {format_price(PRICES[5])} | آیپی 🇹🇷": 5,
-        f"{persian_number(10)} گیگ | {format_price(PRICES[10])} | آیپی 🇹🇷": 10
+        f"۱ گیگ | {format_price(PRICES[1])} | آیپی 🇹🇷": 1,
+        f"۲ گیگ | {format_price(PRICES[2])} | آیپی 🇹🇷": 2,
+        f"۵ گیگ | {format_price(PRICES[5])} | آیپی 🇹🇷": 5,
+        f"۱۰ گیگ | {format_price(PRICES[10])} | آیپی 🇹🇷": 10
     }
     if text in volume_map:
         volume = volume_map[text]
@@ -1219,7 +1217,7 @@ async def handle_normal_commands(update, context, user_id, text):
     
     if text == "🛍️ خرید اشتراک":
         await update.message.reply_text("💳 پلن مورد نظر را انتخاب کنید:", reply_markup=get_subscription_keyboard())
-    elif any(text.startswith(prefix) for prefix in [f"{persian_number(1)} گیگ |", f"{persian_number(2)} گیگ |", f"{persian_number(5)} گیگ |", f"{persian_number(10)} گیگ |"]):
+    elif any(text.startswith(prefix) for prefix in ["۱ گیگ |", "۲ گیگ |", "۵ گیگ |", "۱۰ گیگ |"]):
         await handle_subscription_plan(update, context, user_id, text)
     elif user_states.get(user_id, "").startswith("awaiting_payment_method_"):
         await handle_payment_method(update, context, user_id, text)
