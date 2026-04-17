@@ -906,8 +906,10 @@ async def check_membership_callback(update, context):
     if await is_user_member(user.id):
         invited_by = context.user_data.get("invited_by")
         await ensure_user(user.id, user.username or "", invited_by)
-        await query.edit_message_text("✅ عضویت شما تأیید شد!\n🌐 به فروشگاه فونیکس تانل‌‌ خوش آمدید!")
-        await query.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
+        # حذف کیبورد اینلاین و نمایش پیام تبریک
+        await query.edit_message_text("✅ عضویت شما با موفقیت تأیید شد!\n\n🌐 به فروشگاه فونیکس تانل خوش آمدید!")
+        # ارسال منوی اصلی با کیبورد شیشه‌ای
+        await query.message.reply_text("🌬 منوی اصلی:", reply_markup=get_main_keyboard())
         user_states.pop(user.id, None)
     else:
         kb = InlineKeyboardMarkup([[
@@ -915,10 +917,10 @@ async def check_membership_callback(update, context):
             InlineKeyboardButton("✅ تایید عضویت", callback_data="check_membership")
         ]])
         await query.edit_message_text(
-            "❌ شما هنوز در کانال عضو نشده‌اید.\nلطفاً ابتدا عضو شوید، سپس روی دکمه «✅ تایید عضویت» کلیک کنید.",
+            "❌ شما هنوز در کانال عضو نشده‌اید.\n\n"
+            "لطفاً ابتدا در کانال عضو شوید، سپس روی دکمه «✅ تایید عضویت» کلیک کنید.",
             reply_markup=kb
         )
-
 # ---------- هندلرهای مدیریت کانفیگ برای ادمین ----------
 async def handle_admin_config_action(update, context, user_id, text):
     if text == "➕ اضافه کردن کانفیگ جدید":
