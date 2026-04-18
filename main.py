@@ -656,6 +656,15 @@ async def get_pending_subscriptions() -> List[Dict]:
         return []
 
 async def send_config_to_user(subscription_id: int, user_id: int, volume: int, plan: str, bot) -> bool:
+    # ابتدا بررسی می‌کنیم که آیا این اشتراک قبلاً کانفیگ گرفته است یا خیر
+    existing_config = await db_execute(
+        "SELECT config FROM subscriptions WHERE id = %s AND config IS NOT NULL AND status = 'active'",
+        (subscription_id,), fetchone=True
+    )
+    if existing_config and existing_config[0]:
+        logging.info(f"Subscription {subscription_id} already has config, skipping duplicate send")
+        return True
+    
     config = await get_available_config(volume)
     if config:
         await update_subscription_config(subscription_id, config['config_text'])
@@ -689,13 +698,29 @@ async def send_config_to_user(subscription_id: int, user_id: int, volume: int, p
 
 # ---------- وظیفه دوره‌ای ----------
 async def periodic_pending_check(bot):
+    # ست برای نگهداری subscription_idهایی که در این سیکل پردازش شده‌اند
+    processed_in_cycle = set()
+    
     while True:
         try:
             await asyncio.sleep(30)
             if await get_bot_status():
                 pending_subs = await get_pending_subscriptions()
                 for sub in pending_subs:
+                    sub_id = sub['subscription_id']
+                    # اگر در این سیکل پردازش شده، رد کن
+                    if sub_id in processed_in_cycle:
+                        continue
+                    
+                    # اضافه کردن به ست پردازش شده‌ها
+                    processed_in_cycle.add(sub_id)
+                    
+                    # ارسال کانفیگ
                     await send_config_to_user(sub['subscription_id'], sub['user_id'], sub['volume'], sub['plan'], bot)
+            
+            # پاک کردن ست بعد از هر سیکل (برای سیکل بعدی)
+            processed_in_cycle.clear()
+            
         except Exception as e:
             logging.error(f"Error in periodic check: {e}")
 
@@ -1109,6 +1134,17 @@ async def handle_payment_method(update, context, user_id, text):
 
 async def process_payment_receipt(update, context, user_id, payment_id, receipt_type):
     try:
+        # ابتدا بررسی می‌کنیم که این payment قبلاً تایید شده یا نه
+        payment_status = await db_execute("SELECT status FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+        if not payment_status:
+            await update.message.reply_text("⚠️ درخواست پرداخت یافت نشد.", reply_markup=get_main_keyboard())
+            return
+        
+        if payment_status[0] != 'pending':
+            await update.message.reply_text("⚠️ این فیش قبلاً تایید یا رد شده است.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
+            return
+        
         payment = await db_execute("SELECT amount, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
         if not payment:
             await update.message.reply_text("⚠️ درخواست پرداخت یافت نشد.", reply_markup=get_main_keyboard())
@@ -1284,29 +1320,64 @@ async def admin_callback_handler(update, context):
     try:
         if data.startswith("approve_payment_"):
             payment_id = int(data.split("_")[2])
-            payment = await db_execute("SELECT user_id, amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            
+            # ابتدا بررسی می‌کنیم که آیا این پرداخت قبلاً تایید شده است
+            payment = await db_execute("SELECT user_id, amount, type, description, status FROM payments WHERE id = %s", (payment_id,), fetchone=True)
             if not payment:
                 await query.edit_message_text("⚠️ درخواست پرداخت یافت نشد.")
                 return
-            uid, amt, ptype, desc = payment
+            
+            uid, amt, ptype, desc, status = payment
+            
+            if status != 'pending':
+                await query.edit_message_text(f"⚠️ این پرداخت قبلاً { 'تایید' if status == 'approved' else 'رد' } شده است.")
+                # حذف کیبورد
+                await query.edit_message_reply_markup(reply_markup=None)
+                return
+            
             await update_payment_status(payment_id, "approved")
+            
+            # حذف کیبورد اینلاین بعد از تایید
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text("✅ پرداخت تایید شد. در حال ارسال کانفیگ...")
+            
             if ptype == "buy_subscription":
                 await context.bot.send_message(uid, f"✅ پرداخت شما تایید شد. کد پیگیری: #{payment_id}")
-                await query.edit_message_reply_markup(reply_markup=None)
-                await query.message.reply_text("✅ پرداخت تایید شد. در حال ارسال کانفیگ...")
-                sub = await db_execute("SELECT id, volume, plan FROM subscriptions WHERE payment_id = %s", (payment_id,), fetchone=True)
+                sub = await db_execute("SELECT id, volume, plan, config FROM subscriptions WHERE payment_id = %s", (payment_id,), fetchone=True)
                 if sub:
-                    subscription_id, volume, plan = sub
-                    await send_config_to_user(subscription_id, uid, volume, plan, context.bot)
+                    subscription_id, volume, plan, existing_config = sub
+                    # بررسی نکن که قبلاً کانفیگ دارد یا نه - اگر دارد باز هم ارسال نکن
+                    if existing_config:
+                        logging.info(f"Subscription {subscription_id} already has config, skipping resend")
+                        await query.message.reply_text(f"⚠️ این اشتراک قبلاً کانفیگ خود را دریافت کرده است.")
+                    else:
+                        await send_config_to_user(subscription_id, uid, volume, plan, context.bot)
+                        
         elif data.startswith("reject_payment_"):
             payment_id = int(data.split("_")[2])
+            
+            # بررسی وضعیت فعلی پرداخت
+            payment = await db_execute("SELECT user_id, status FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            if not payment:
+                await query.edit_message_text("⚠️ درخواست پرداخت یافت نشد.")
+                return
+            
+            uid, status = payment
+            
+            if status != 'pending':
+                await query.edit_message_text(f"⚠️ این پرداخت قبلاً { 'تایید' if status == 'approved' else 'رد' } شده است.")
+                await query.edit_message_reply_markup(reply_markup=None)
+                return
+            
             await update_payment_status(payment_id, "rejected")
-            payment = await db_execute("SELECT user_id FROM payments WHERE id = %s", (payment_id,), fetchone=True)
-            if payment:
-                user_id = payment[0]
-                await context.bot.send_message(user_id, "❌ متأسفانه پرداخت شما تایید نشد. لطفاً مجدداً تلاش کنید.")
+            
+            # حذف کیبورد اینلاین بعد از رد
             await query.edit_message_reply_markup(reply_markup=None)
             await query.message.reply_text("❌ پرداخت رد شد.")
+            
+            if uid:
+                await context.bot.send_message(uid, "❌ متأسفانه پرداخت شما تایید نشد. لطفاً مجدداً تلاش کنید.")
+                
         elif data == "admin_agent_action":
             await query.edit_message_text("🆔 آیدی کاربر را وارد کنید:")
             user_states[ADMIN_IDS[0]] = "awaiting_admin_user_id_for_agent"
